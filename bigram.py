@@ -72,12 +72,23 @@ class Head(nn.Module):
         k = self.key(x) #(B, T, C)
         q = self.query(x) #(B, T, C)
         #Compute attention scores - Affinities
-        wei = q @ k.transpose(-2, -1) * C**-0.5 #(B, T, C) @ (B, C, T) -> (B, T, T)
+        wei = q @ k.transpose(-2, -1) * k.shape[-1]**-0.5 #(B, T, C) @ (B, C, T) -> (B, T, T)
         wei = wei.masked_fill(self.tril[:T, :T] == 0, float('-inf'))
         wei = F.softmax(wei, dim=-1)
         #Perform weighted aggregation of values
         v = self.value(x) #(B, T, C)
         out = wei @ v #(B, T, T) @ (B, T, C)-> (B, T, C)
+        return out
+
+class MultiHeadAttention(nn.Module):
+    #Multiple Heads of self-attention in parrallel
+
+    def __init__(self, num_heads, head_size):
+        super().__init__()
+        self.heads = nn.ModuleList([Head(head_size) for _ in range(num_heads)])
+
+    def forward(self, x):
+        return torch.cat([h(x) for h in self.heads], dim=-1)
 
 
 #super simple bigram model
@@ -88,7 +99,7 @@ class BigramLanguageModel(nn.Module):
         #each token directly reads off the logits for the next token from a lookup table
         self.token_embedding_table = nn.Embedding(vocab_size, n_embed)
         self.position_embedding_table = nn.Embedding(block_size, n_embed)
-        self.sa_head = Head(n_embed)
+        self.sa_head = MultiHeadAttention(4, n_embed//4)# i.e. 4 heads of 8 dimension self attention
         self.lm_head = nn.Linear(n_embed, vocab_size)
 
     def forward(self, idx, targets=None):
@@ -99,7 +110,7 @@ class BigramLanguageModel(nn.Module):
         pos_emb = self.position_embedding_table(torch.arange(T, device=device))#(T, C)
         x = tok_emb + pos_emb #(B, T, C)
         x = self.sa_head(x) #Apply self attention
-        logits = self.lm_head(tok_emb) #(B,T,vocab_size)
+        logits = self.lm_head(x) #(B,T,vocab_size)
 
         if targets is None:
             loss = None
